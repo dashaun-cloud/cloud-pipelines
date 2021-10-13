@@ -1,0 +1,120 @@
+/*
+Contains tasks and setup to use for docs generation
+
+Requires in the buildscript
+
+- classpath 'org.asciidoctor:asciidoctor-gradle-plugin:1.5.8'
+- project `docs-sources` that contains under `src/main/asciidoc` the asciidoc
+*/
+buildscript {
+	repositories { 
+		jcenter()
+		maven { url "https://repo.spring.io/snapshot" }
+		maven { url "https://repo.spring.io/milestone" }
+		maven { url "https://repo.spring.io/release" }
+	}
+
+	dependencies {
+		classpath "org.asciidoctor:asciidoctor-gradle-plugin:${asciidoctorGradleVersion}"
+		classpath "com.github.jruby-gradle:jruby-gradle-plugin:${jrubyVersion}"
+		classpath 'org.ajoberstar:grgit:2.2.1'
+	}
+}
+
+import org.ajoberstar.grgit.Grgit
+
+apply plugin: 'java'
+apply plugin: "com.github.jruby-gradle.base"
+apply plugin: 'org.asciidoctor.convert'
+
+repositories {  
+	jcenter()
+	maven { url "https://repo.spring.io/snapshot" }
+	maven { url "https://repo.spring.io/milestone" }
+	maven { url "https://repo.spring.io/release" }
+}
+
+ext {
+	git = { -> try { Grgit.open() } catch (Exception ex) { project.logger.error("Exception occurred while opening git repo", ex); return null } }.call()
+	ghOrg = "cloudpipelines"
+	repo = project.name
+	branch = git != null ? git.branch.current().getName() : "master"
+	docsBaseUrl = [
+		'https://raw.githubusercontent.com',
+		ghOrg,
+		repo,
+		branch
+	].join('/')
+}
+
+task cleanDocs(type: Delete) {
+	enabled = !System.getenv("JENKINS_HOME")
+	delete project(":docs").projectDir.path
+}
+
+task createFolder() {
+	dependsOn("cleanDocs")
+	doLast {
+		new File(project.rootDir, "docs").mkdirs()
+	}
+}
+
+configurations {
+	docResources
+}
+
+dependencies {
+	gems 'rubygems:asciidoctor-diagram:1.5.9'
+	docResources "io.spring.docresources:spring-doc-resources:${springDocResourcesVersion}"
+}
+
+def unzippedDir = file('docs')
+
+task unzip(type: Copy) {
+    configurations.docResources.copy().asFileTree.each {
+        from(zipTree(it))
+    }
+    into unzippedDir
+}
+
+// don't run on CI
+jrubyPrepare.enabled = !System.getenv("JENKINS_HOME")
+
+asciidoctor {
+	// don't run on CI
+	enabled = !System.getenv("JENKINS_HOME")
+	dependsOn = ["createFolder", "jrubyPrepare", "unzip"]
+	sourceDir = file('docs-sources/src/main/asciidoc')
+	gemPath = jrubyPrepare.outputDir
+	outputDir = file('docs')
+	separateOutputDirs = false
+	requires = ['asciidoctor-diagram']
+	backends = ["html5"]
+	attributes  'icons': 'font',
+		'idprefix': '',
+		'idseparator': '-',
+		'source-highlighter': 'highlight.js', // TODO switch to 'rouge' once supported by the html5 backend
+		stylesdir: 'css/',
+		stylesheet: 'spring.css',
+		'allow-uri-read': true,
+		nofooter: '',
+		sectlinks: 'true',
+		docinfo: 'shared',
+		linkcss: true,
+		highlightjsdir: 'js/highlight',
+		'highlightjs-theme': 'atom-one-dark-reasonable',
+		toc: 'left',
+		'toc-levels': 4,
+		'branch': branch,
+		'org': ghOrg,
+		'repo': repo,
+		'docs-base-url': docsBaseUrl,
+		'intro-root-docs': "${docsBaseUrl}/docs/images/intro"
+}
+
+task generateDocs() {
+	description = "Creates documentation for the project"
+	dependsOn = ["asciidoctor"]
+	// don't run on CI
+	enabled = !System.getenv("JENKINS_HOME")
+}
